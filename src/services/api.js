@@ -62,11 +62,13 @@ let mockAppointments = [
 let mockAbout = {
   name: 'Dr. Sarah Mitchell',
   title: 'Licensed Mental Health Counselor',
+  profileImage: '/counselor.png',
   bio: 'With over 15 years of experience in mental health counseling, I specialize in cognitive-behavioral therapy, mindfulness-based approaches, and trauma-informed care. My practice is built on empathy, trust, and evidence-based methods.',
   credentials: 'PhD Clinical Psychology, Licensed MHC, CBT Certified, EMDR Trained',
   approach: 'I believe in creating a safe, non-judgmental space where you can explore your thoughts and feelings. Together, we will develop personalized strategies to help you navigate challenges and build resilience.',
   email: 'sarah@mindcare.com',
   phone: '+1-555-CARE',
+  whatsapp: 'https://wa.me/15550000',
 };
 
 function getDateStr(daysFromNow, hour) {
