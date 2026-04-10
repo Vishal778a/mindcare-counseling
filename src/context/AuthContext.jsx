@@ -6,39 +6,78 @@ export const AuthContext = createContext(null);
 // Or set via environment variable VITE_ADMIN_EMAIL
 const ADMIN_EMAIL = import.meta.env.VITE_ADMIN_EMAIL || '';
 
+// Session expires after 8 hours
+const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+
+function saveSession(user) {
+  const session = {
+    user,
+    expiresAt: Date.now() + SESSION_TTL_MS,
+  };
+  localStorage.setItem('mindcare_session', JSON.stringify(session));
+}
+
+function loadSession() {
+  try {
+    const raw = localStorage.getItem('mindcare_session');
+    if (!raw) return null;
+
+    const session = JSON.parse(raw);
+
+    // Check expiry
+    if (Date.now() > session.expiresAt) {
+      localStorage.removeItem('mindcare_session');
+      return null;
+    }
+
+    // Demo admin sessions should NOT persist across page loads
+    // Only Google-authenticated admin sessions persist
+    if (session.user?.role === 'admin' && !session.user?.googleId) {
+      localStorage.removeItem('mindcare_session');
+      return null;
+    }
+
+    return session.user;
+  } catch {
+    localStorage.removeItem('mindcare_session');
+    return null;
+  }
+}
+
+function clearSession() {
+  localStorage.removeItem('mindcare_session');
+  // Also clear legacy key from previous versions
+  localStorage.removeItem('mindcare_user');
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check for stored session
-    const stored = localStorage.getItem('mindcare_user');
-    if (stored) {
-      try {
-        setUser(JSON.parse(stored));
-      } catch {
-        localStorage.removeItem('mindcare_user');
-      }
+    // Clear any legacy session from old format
+    if (localStorage.getItem('mindcare_user')) {
+      localStorage.removeItem('mindcare_user');
+    }
+
+    const storedUser = loadSession();
+    if (storedUser) {
+      setUser(storedUser);
     }
     setLoading(false);
   }, []);
 
   const login = useCallback((userData) => {
-    // Determine role: if email matches admin email → admin, otherwise patient
     const role = (ADMIN_EMAIL && userData.email === ADMIN_EMAIL) ? 'admin' : userData.role || 'patient';
-    const fullUser = {
-      ...userData,
-      role,
-    };
+    const fullUser = { ...userData, role };
     setUser(fullUser);
-    localStorage.setItem('mindcare_user', JSON.stringify(fullUser));
+    saveSession(fullUser);
     return fullUser;
   }, []);
 
   // Google OAuth callback — decode the credential JWT
   const loginWithGoogle = useCallback((credentialResponse) => {
     try {
-      // Decode the Google JWT token (base64 payload)
       const token = credentialResponse.credential;
       const payload = JSON.parse(atob(token.split('.')[1]));
 
@@ -50,12 +89,11 @@ export function AuthProvider({ children }) {
         token: token,
       };
 
-      // Check if this email is the admin
       const role = (ADMIN_EMAIL && payload.email === ADMIN_EMAIL) ? 'admin' : 'patient';
       const fullUser = { ...userData, role };
 
       setUser(fullUser);
-      localStorage.setItem('mindcare_user', JSON.stringify(fullUser));
+      saveSession(fullUser);
       return fullUser;
     } catch (err) {
       console.error('Google login failed:', err);
@@ -63,34 +101,37 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  // Dev-only admin login — session is NOT persisted (memory only)
   const loginAsAdmin = useCallback(() => {
     const adminUser = {
       email: ADMIN_EMAIL || 'counsellor@mindcare.com',
       name: 'Dr. Sarah Mitchell',
       role: 'admin',
       picture: null,
+      isDemo: true,
     };
     setUser(adminUser);
-    localStorage.setItem('mindcare_user', JSON.stringify(adminUser));
+    // Intentionally NOT saving to localStorage — expires on page close/refresh
     return adminUser;
   }, []);
 
+  // Demo patient login — persists (patients are less sensitive)
   const loginAsPatient = useCallback(() => {
     const patientUser = {
       email: 'patient@example.com',
       name: 'Alex Johnson',
       role: 'patient',
       picture: null,
+      isDemo: true,
     };
     setUser(patientUser);
-    localStorage.setItem('mindcare_user', JSON.stringify(patientUser));
+    saveSession(patientUser);
     return patientUser;
   }, []);
 
   const logout = useCallback(() => {
     setUser(null);
-    localStorage.removeItem('mindcare_user');
-    // Also revoke Google session if using Google Sign-In
+    clearSession();
     if (window.google?.accounts?.id) {
       window.google.accounts.id.disableAutoSelect();
     }
