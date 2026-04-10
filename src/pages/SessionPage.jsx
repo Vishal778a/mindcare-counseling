@@ -13,83 +13,125 @@ export default function SessionPage() {
   const [videoEnabled, setVideoEnabled] = useState(true);
   const [callDuration, setCallDuration] = useState(0);
   const [localStream, setLocalStream] = useState(null);
+  const [cameraReady, setCameraReady] = useState(false);
 
   const timerRef = useRef(null);
+  const streamRef = useRef(null);
 
-  // Simulate connection
+  // Step 1: Get camera stream immediately
   useEffect(() => {
     let mounted = true;
 
-    async function initSession() {
+    async function getCamera() {
       try {
-        // Request media access
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
           audio: true,
-        }).catch(() => {
-          // Fallback: create a simulated canvas stream if no camera
-          const canvas = document.createElement('canvas');
-          canvas.width = 640;
-          canvas.height = 480;
-          const ctx = canvas.getContext('2d');
-
-          // Draw a gradient background as placeholder
-          const gradient = ctx.createLinearGradient(0, 0, 640, 480);
-          gradient.addColorStop(0, '#6366f1');
-          gradient.addColorStop(1, '#a78bfa');
-          ctx.fillStyle = gradient;
-          ctx.fillRect(0, 0, 640, 480);
-          ctx.fillStyle = 'white';
-          ctx.font = '24px Inter, sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText('📷 Camera Preview', 320, 240);
-
-          return canvas.captureStream(30);
         });
+
+        if (!mounted) {
+          stream.getTracks().forEach(t => t.stop());
+          return;
+        }
+
+        streamRef.current = stream;
+        setLocalStream(stream);
+        setCameraReady(true);
+      } catch (err) {
+        console.warn('Camera access denied or unavailable, using fallback:', err.message);
 
         if (!mounted) return;
 
-        setLocalStream(stream);
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = stream;
-        }
+        // Fallback: animated canvas stream
+        const canvas = document.createElement('canvas');
+        canvas.width = 640;
+        canvas.height = 480;
+        const ctx = canvas.getContext('2d');
 
-        // Simulate peer connection delay
-        setTimeout(() => {
+        let hue = 0;
+        function drawFrame() {
           if (!mounted) return;
-          setIsConnecting(false);
-          setIsConnected(true);
+          hue = (hue + 0.5) % 360;
+          const gradient = ctx.createLinearGradient(0, 0, 640, 480);
+          gradient.addColorStop(0, `hsl(${hue}, 60%, 30%)`);
+          gradient.addColorStop(1, `hsl(${(hue + 60) % 360}, 60%, 20%)`);
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, 640, 480);
+          ctx.fillStyle = 'rgba(255,255,255,0.9)';
+          ctx.font = '600 22px Inter, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText('📷 Camera Unavailable', 320, 230);
+          ctx.font = '400 14px Inter, sans-serif';
+          ctx.fillStyle = 'rgba(255,255,255,0.6)';
+          ctx.fillText('Grant camera permission to enable video', 320, 260);
+          requestAnimationFrame(drawFrame);
+        }
+        drawFrame();
 
-          // Start duration timer
-          timerRef.current = setInterval(() => {
-            setCallDuration(prev => prev + 1);
-          }, 1000);
-        }, 2000);
-      } catch (err) {
-        console.error('Session init failed:', err);
-        setIsConnecting(false);
+        const stream = canvas.captureStream(30);
+        streamRef.current = stream;
+        setLocalStream(stream);
+        setCameraReady(true);
       }
     }
 
-    initSession();
+    getCamera();
 
     return () => {
       mounted = false;
+    };
+  }, []);
+
+  // Step 2: Attach stream to video element whenever either changes
+  useEffect(() => {
+    if (localVideoRef.current && localStream) {
+      localVideoRef.current.srcObject = localStream;
+      // Ensure playback starts
+      localVideoRef.current.play().catch(() => {
+        // Autoplay may be blocked, user interaction needed
+      });
+    }
+  }, [localStream, cameraReady, isConnecting]);
+
+  // Step 3: Simulate peer connection after camera is ready
+  useEffect(() => {
+    if (!cameraReady) return;
+
+    const timeout = setTimeout(() => {
+      setIsConnecting(false);
+      setIsConnected(true);
+
+      timerRef.current = setInterval(() => {
+        setCallDuration(prev => prev + 1);
+      }, 1000);
+    }, 1500);
+
+    return () => clearTimeout(timeout);
+  }, [cameraReady]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+      }
     };
   }, []);
 
   const endCall = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);
-    if (localStream) {
-      localStream.getTracks().forEach(t => t.stop());
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
     }
+    setLocalStream(null);
     navigate(-1);
-  }, [localStream, navigate]);
+  }, [navigate]);
 
   const toggleAudio = () => {
-    if (localStream) {
-      const audioTrack = localStream.getAudioTracks()[0];
+    if (streamRef.current) {
+      const audioTrack = streamRef.current.getAudioTracks()[0];
       if (audioTrack) {
         audioTrack.enabled = !audioTrack.enabled;
         setAudioEnabled(audioTrack.enabled);
@@ -98,8 +140,8 @@ export default function SessionPage() {
   };
 
   const toggleVideo = () => {
-    if (localStream) {
-      const videoTrack = localStream.getVideoTracks()[0];
+    if (streamRef.current) {
+      const videoTrack = streamRef.current.getVideoTracks()[0];
       if (videoTrack) {
         videoTrack.enabled = !videoTrack.enabled;
         setVideoEnabled(videoTrack.enabled);
@@ -152,51 +194,56 @@ export default function SessionPage() {
       {/* Video Area */}
       <div className="session-container">
         <div className="session-video-area">
-          {/* Local Video (You) */}
+          {/* Local Video (You) — ALWAYS rendered so ref is available */}
           <div className="session-video-box">
-            {isConnecting ? (
-              <div className="text-center">
-                <div className="spinner" style={{ margin: '0 auto var(--space-4)' }}></div>
-                <p style={{ color: 'var(--color-text-tertiary)' }}>Setting up camera...</p>
+            {/* Video element is always in DOM, just hidden when camera off */}
+            <video
+              ref={localVideoRef}
+              autoPlay
+              playsInline
+              muted
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                transform: 'scaleX(-1)',
+                display: videoEnabled ? 'block' : 'none',
+              }}
+            />
+
+            {/* Camera off overlay */}
+            {!videoEnabled && (
+              <div className="flex-center flex-col gap-2" style={{ position: 'absolute', inset: 0 }}>
+                <div style={{
+                  width: '80px',
+                  height: '80px',
+                  borderRadius: '50%',
+                  background: 'var(--color-accent-gradient)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '2rem',
+                }}>
+                  🧑
+                </div>
+                <p style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)' }}>Camera off</p>
               </div>
-            ) : (
-              <>
-                <video
-                  ref={localVideoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  style={{
-                    width: '100%',
-                    height: '100%',
-                    objectFit: 'cover',
-                    transform: 'scaleX(-1)',
-                    display: videoEnabled ? 'block' : 'none',
-                  }}
-                />
-                {!videoEnabled && (
-                  <div className="flex-center flex-col gap-2" style={{ position: 'absolute', inset: 0 }}>
-                    <div style={{
-                      width: '80px',
-                      height: '80px',
-                      borderRadius: '50%',
-                      background: 'var(--color-accent-gradient)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '2rem',
-                    }}>
-                      🧑
-                    </div>
-                    <p style={{ color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)' }}>Camera off</p>
-                  </div>
-                )}
-              </>
             )}
-            <div className="session-video-label">You</div>
+
+            {/* Connecting spinner overlay */}
+            {isConnecting && !cameraReady && (
+              <div className="flex-center flex-col gap-2" style={{ position: 'absolute', inset: 0, background: 'var(--color-bg-secondary)' }}>
+                <div className="spinner"></div>
+                <p style={{ color: 'var(--color-text-tertiary)' }}>Starting camera...</p>
+              </div>
+            )}
+
+            <div className="session-video-label">
+              You {!audioEnabled && '🔇'}
+            </div>
           </div>
 
-          {/* Remote Video (Other person) */}
+          {/* Remote Video (Counselor) */}
           <div className="session-video-box">
             {isConnected ? (
               <div className="flex-center flex-col gap-3" style={{ position: 'absolute', inset: 0 }}>
